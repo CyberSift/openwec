@@ -81,7 +81,7 @@ pub struct Event {
 
 impl Event {
     pub fn from_str(metadata: &EventMetadata, content: &str) -> Result<Self> {
-        let doc = Document::parse(content).context("Failed to parse event XML")?;
+        let doc_parse_attempt = Document::parse(content);
         let mut event = Event::default();
         event.additional = Additional {
             addr: metadata.addr().ip().to_string(),
@@ -94,32 +94,44 @@ impl Event {
                 name: metadata.subscription_name().to_owned(),
                 uri: metadata.subscription_uri().cloned(),
             },
+            errors: None,
         };
-        let root = doc.root_element();
-        for node in root.children() {
-            if node.tag_name().name() == "System" {
-                event.system = System::from(&node).context("Parsing failure in System")?
-            } else if node.tag_name().name() == "EventData" {
-                event.data = parse_event_data(&node).context("Parsing failure in EventData")?
-            } else if node.tag_name().name() == "UserData" {
-                event.data = parse_user_data(&node).context("Parsing failure in UserData")?
-            } else if node.tag_name().name() == "BinaryEventData" {
-                event.data = DataType::BinaryEventData(node.text().unwrap_or_default().to_owned());
-            } else if node.tag_name().name() == "DebugData" {
-                event.data = parse_debug_data(&node).context("Parsing failure in DebugData")?
-            } else if node.tag_name().name() == "ProcessingErrorData" {
-                event.data = parse_processing_error_data(&node)
-                    .context("Parsing failure in ProcessingErrorData")?
-            } else if node.tag_name().name() == "RenderingInfo" {
-                event.rendering_info =
-                    Some(RenderingInfo::from(&node).context("Parsing failure in RenderingInfo")?)
-            } else if node.tag_name().name() == "SubscriptionBookmarkEvent" {
-                // Nothing to do, this node is present in the first received event (EventID 111)
-            } else {
-                info!("Unknown node {} when parsing Event", node.tag_name().name());
-                trace!("Event was: {}", content);
+
+        match doc_parse_attempt {
+            Ok(doc) => {
+                let root = doc.root_element();
+                for node in root.children() {
+                    if node.tag_name().name() == "System" {
+                        event.system = System::from(&node).context("Parsing failure in System")?
+                    } else if node.tag_name().name() == "EventData" {
+                        event.data = parse_event_data(&node).context("Parsing failure in EventData")?
+                    } else if node.tag_name().name() == "UserData" {
+                        event.data = parse_user_data(&node).context("Parsing failure in UserData")?
+                    } else if node.tag_name().name() == "BinaryEventData" {
+                        event.data = DataType::BinaryEventData(node.text().unwrap_or_default().to_owned());
+                    } else if node.tag_name().name() == "DebugData" {
+                        event.data = parse_debug_data(&node).context("Parsing failure in DebugData")?
+                    } else if node.tag_name().name() == "ProcessingErrorData" {
+                        event.data = parse_processing_error_data(&node)
+                            .context("Parsing failure in ProcessingErrorData")?
+                    } else if node.tag_name().name() == "RenderingInfo" {
+                        event.rendering_info =
+                            Some(RenderingInfo::from(&node).context("Parsing failure in RenderingInfo")?)
+                    } else if node.tag_name().name() == "SubscriptionBookmarkEvent" {
+                        // Nothing to do, this node is present in the first received event (EventID 111)
+                    } else {
+                        info!("Unknown node {} when parsing Event", node.tag_name().name());
+                        trace!("Event was: {}", content);
+                    }
+                }
             }
+            Err(_e) => event.additional.errors = Some(ErrorInfo{
+                content: content.to_string(),
+                error_msg: "Failed to parse event XML".to_string(),
+            })
         }
+
+
 
         Ok(event)
     }
@@ -202,6 +214,14 @@ fn parse_user_data(user_data_node: &Node) -> Result<DataType> {
 }
 
 #[derive(Debug, Default, Serialize, Clone)]
+struct ErrorInfo {
+    #[serde(rename = "OriginalContent")]
+    content: String,
+    #[serde(rename = "ErrorMessage")]
+    error_msg: String,
+}
+
+#[derive(Debug, Default, Serialize, Clone)]
 struct Additional {
     #[serde(rename = "IpAddress")]
     addr: String,
@@ -213,6 +233,8 @@ struct Additional {
     subscription: SubscriptionType,
     #[serde(rename = "Node", skip_serializing_if = "Option::is_none")]
     node: Option<String>,
+    #[serde(rename = "Errors", skip_serializing_if = "Option::is_none")]
+    errors: Option<ErrorInfo>,
 }
 
 #[derive(Debug, Default, Serialize, Clone)]
