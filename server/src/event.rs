@@ -4,6 +4,7 @@ use log::{info, trace};
 use roxmltree::{Document, Node};
 use serde::Serialize;
 use std::{collections::HashMap, net::SocketAddr};
+use itertools::Itertools;
 
 use crate::subscription::Subscription;
 
@@ -69,8 +70,8 @@ impl DataType {
 
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct Event {
-    #[serde(rename = "System")]
-    system: System,
+    #[serde(rename = "System", skip_serializing_if = "Option::is_none")]
+    system: Option<System>,
     #[serde(flatten, skip_serializing_if = "DataType::is_unknown")]
     data: DataType,
     #[serde(rename = "RenderingInfo", skip_serializing_if = "Option::is_none")]
@@ -102,7 +103,7 @@ impl Event {
                 let root = doc.root_element();
                 for node in root.children() {
                     if node.tag_name().name() == "System" {
-                        event.system = System::from(&node).context("Parsing failure in System")?
+                        event.system = Option::from(System::from(&node).context("Parsing failure in System")?)
                     } else if node.tag_name().name() == "EventData" {
                         event.data = parse_event_data(&node).context("Parsing failure in EventData")?
                     } else if node.tag_name().name() == "UserData" {
@@ -125,10 +126,30 @@ impl Event {
                     }
                 }
             }
-            Err(_e) => event.additional.errors = Some(ErrorInfo{
-                content: content.to_string(),
-                error_msg: "Failed to parse event XML".to_string(),
-            })
+            Err(_e) => {
+                let content_parts = content.split("<RenderingInfo").collect_vec();
+                if content_parts.len() > 1 {
+                    let clean_content = content_parts[0].to_string()+"</Event>";
+                    event = match Event::from_str(metadata, &clean_content) {
+                        Ok(mut recovered_event) => {
+                            recovered_event.additional.errors = Some(ErrorInfo {
+                                content: content.to_string(),
+                                error_msg: "Failed to parse event XML".to_string(),
+                            });
+                            recovered_event
+                        },
+                        Err(_e) => {
+                            event.additional.errors = Some(ErrorInfo {
+                                content: content.to_string(),
+                                error_msg: "Failed to parse event XML".to_string(),
+                            });
+                            event
+                        }
+                    };
+                }
+
+
+            }
         }
 
 
