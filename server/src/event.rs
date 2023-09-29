@@ -146,6 +146,11 @@ impl Event {
                             event
                         }
                     };
+                } else {
+                    event.additional.errors = Some(ErrorInfo {
+                        content: content.to_string(),
+                        error_msg: "Failed to parse event XML".to_string(),
+                    });
                 }
 
 
